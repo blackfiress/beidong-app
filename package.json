@@ -1,0 +1,20 @@
+﻿{
+  "name": "recitation-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server/index.js & cd client && npx vite",
+    "dev:server": "node server/index.js",
+    "dev:client": "cd client && npx vite",
+    "build": "node node_modules/vite/bin/vite.js build --config vite.config.js",
+    "start": "node server/index.js",
+    "seed": "node seed.js"
+  },
+  "dependencies": {
+    "sql.js": "^1.11.0",
+    "express": "^4.21.0",
+    "cors": "^2.8.5",
+    "vite": "^6.0.0",
+    "@vitejs/plugin-react": "^4.3.0"
+  }
+}
