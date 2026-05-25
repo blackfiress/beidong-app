@@ -1,0 +1,11 @@
+﻿node_modules/
+.vite/
+dist/
+*.log
+.DS_Store
+npm-cache/
+.tmp/
+*.bat
+*.vbs
+server.err
+server.log
