@@ -1,0 +1,384 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>背书小能手</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f5;color:#333;min-height:100vh}
+.app{max-width:640px;margin:0 auto;padding:16px}
+.hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding:8px 0}
+.hdr h1{font-size:22px;cursor:pointer;font-weight:700}
+.hdr a{color:#2563eb;cursor:pointer;font-size:14px;text-decoration:none;margin-left:12px}
+.tab{padding:8px 16px;border-radius:8px;font-size:13px;cursor:pointer;border:none;font-weight:500}
+.ta{background:#2563eb;color:#fff}.tb{background:#e5e7eb;color:#4b5563}
+.card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.btn{display:inline-block;padding:10px 20px;border-radius:10px;font-size:14px;font-weight:500;border:none;cursor:pointer;text-align:center}
+.bp{background:#2563eb;color:#fff}.bg{background:#16a34a;color:#fff}.by{background:#ca8a04;color:#fff}
+.bgr{background:#e5e7eb;color:#4b5563}.bs{padding:6px 12px;font-size:12px;border-radius:8px}.bw{width:100%}
+.flex{display:flex}.f1{flex:1}.g2{gap:8px}.g3{gap:12px}.ac{align-items:center}.jsb{justify-content:space-between}
+.fw{flex-wrap:wrap}.tc{text-align:center}.gr{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.pb{height:6px;background:#e5e7eb;border-radius:99px;overflow:hidden}
+.pf{height:100%;background:#22c55e;border-radius:99px;transition:width .3s}
+.bd{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:500}
+.bg2{background:#dcfce7;color:#166534}.by2{background:#fef9c3;color:#854d0e}
+.rb{background:#eff6ff;border-radius:12px;padding:20px;min-height:80px;margin-bottom:24px}
+.sc{background:#fff;border-radius:12px;padding:20px;text-align:center;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.f12{font-size:12px;color:#6b7280}.s14{font-size:14px}.s20{font-size:20px;font-weight:700}
+.fw6{font-weight:600}.gn{color:#16a34a}.rd{color:#dc2626}.gy{color:#6b7280}.lg{color:#9ca3af}
+.cg{color:#16a34a}.ce{color:#dc2626;background:#fef2f2;border-radius:2px;padding:0 2px}
+.ed{background:#f9fafb;border-radius:6px;padding:8px;margin-top:6px;font-size:12px;color:#6b7280}
+.ld{padding:40px 0;text-align:center;color:#9ca3af}
+.mb2{margin-bottom:8px}.mb3{margin-bottom:12px}.mb4{margin-bottom:16px}.mb6{margin-bottom:24px}
+.inp{width:100%;padding:10px 14px;border:1px solid #d1d5db;border-radius:10px;font-size:14px;outline:none;background:#fff}
+.ta{width:100%;padding:10px 14px;border:1px solid #d1d5db;border-radius:10px;font-size:14px;min-height:120px;outline:none;background:#fff}
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+<script>
+"use strict";
+
+// ========== Android Bridge API ==========
+const B = window.AndroidBridge;
+
+// Parse JSON safely
+function pj(s) { try { return JSON.parse(s); } catch(e) { return null; } }
+
+// ========== Data helpers ==========
+async function asyncCall(method, ...args) {
+  // Some bridge calls might be synchronous, wrap in promise
+  try {
+    return B[method](...args);
+  } catch(e) {
+    console.error(method, e);
+    throw e;
+  }
+}
+
+const C = {
+  texts: {
+    list: (subject) => {
+      const result = B.listTexts(subject || null);
+      return pj(result) || [];
+    },
+    get: (id) => {
+      const result = B.getText(id);
+      return pj(result);
+    },
+    create: (d) => B.createText(d.subject_id, d.title, d.content, d.source || '', d.grade || '', d.tags || ''),
+    update: (id, d) => B.updateText(id, d.title, d.content, d.grade || '', d.tags || ''),
+    delete: (id) => B.deleteText(id)
+  },
+  attempts: {
+    create: (d) => B.createAttempt(d.text_id, JSON.stringify(d.spoken_sentences), d.score || 0, JSON.stringify(d.results || []), d.duration_sec || 0),
+    history: (id) => pj(B.getAttemptHistory(id)) || []
+  },
+  mistakes: {
+    stats: () => pj(B.getMistakeStats()) || [],
+    rankings: () => pj(B.getMistakeRankings()) || [],
+    clear: () => B.clearMistakes(),
+    add: (textId, sentenceIndex, word) => B.addMistake(textId, sentenceIndex, word)
+  }
+};
+
+// ========== Speech Recognition (Android native) ==========
+let speechCallback = null;
+let isListening = false;
+
+function startAndroidRecognition(lang, callback) {
+  speechCallback = callback;
+  isListening = true;
+  window["_recognitionCallback"] = function(jsonStr) {
+    isListening = false;
+    const data = pj(jsonStr);
+    if (data && data.text && callback) callback(data.text);
+    else if (data && data.error && callback) callback('');
+  };
+  B.startListening(lang === 'en-US' ? 'en-US' : 'zh-CN', '_recognitionCallback');
+}
+
+function stopAndroidRecognition() {
+  isListening = false;
+  try { B.stopListening(); } catch(e) {}
+}
+
+// ========== State ==========
+const S = {};
+function nav(p, s) { location.hash = "#" + p; if (s) Object.assign(S, s); }
+function cu() { return location.hash.slice(1) || "/"; }
+function sh(h) { document.getElementById("app").innerHTML = h; }
+function ld() { return '<div class=ld>加载中...</div>'; }
+
+// ========== Page: Home ==========
+function pH() {
+  const sj = S.sj || "语文", sq = S.sq || "";
+  if (!S.tx) {
+    S.tx = null;
+    // Synchronous call in Android bridge
+    const data = C.texts.list(sj);
+    S.tx = data;
+    sh(pH());
+    return ld();
+  }
+  const f = S.tx.filter(t => t.title && t.title.includes(sq));
+  let h = '<div class=hdr><h1 onclick="nav(\'/\')">📚 背书小能手</h1><nav><a onclick="nav(\'/ms\')">错题本</a><a onclick="nav(\'/ad\')">管理</a></nav></div>';
+  h += '<div class=flex g2 mb4>' + ["语文","英语"].map(s => "<button class='tab " + (sj===s?"ta":"tb") + "' onclick=\"S.sj='" + s + "';S.tx=null;sh(pH())\">" + (s==="语文"?"🈁 语文":"🔤 英语") + "</button>").join('') + '</div>';
+  h += "<input class='inp mb4' placeholder='🔍 搜索...' value='" + sq + "' oninput=\"S.sq=this.value;sh(pH())\">";
+  if (f.length === 0) h += "<div class='ld tc'>📖<br>" + (sq ? "没有找到" : "还没有课文") + "</div>";
+  else for (const t of f) {
+    const pct = t.avg_score || 0;
+    h += '<div class=card><div class="flex jsb ac mb2"><span class="s14 fw6">' + t.title + '</span>' + (t.grade ? '<span class=f12>' + t.grade + '</span>' : '') + '</div>';
+    h += '<div class="flex ac g3 mb3"><div class="f1 pb"><div class=pf style="width:' + pct + '%"></div></div><span class=f12 style="min-width:44px;text-align:right">' + (pct ? Math.round(pct) + "分" : "未背") + '</span></div>';
+    h += '<div class="flex g2"><button class="btn bp bs f1" onclick="S.ri=' + t.id + ';S.rt=null;nav(\'/r/' + t.id + '\')">开始背诵</button><button class="btn bgr bs" onclick="nav(\'/res/' + t.id + '\')">历史</button></div></div>';
+  }
+  return h;
+}
+
+// ========== Page: Recite ==========
+function pR() {
+  const m = cu().match(/\/r\/(\d+)/);
+  if (!m) { nav("/"); return ld(); }
+  const id = Number(m[1]);
+  if (!S.rt || S.ri !== id) {
+    S.ri = id; S.rt = null;
+    const d = C.texts.get(id);
+    if (d) {
+      S.rt = d;
+      S.sn = d.sentences || d.content.split("|").filter(s => s.trim());
+      S.ci = 0; S.rg = ""; S.rs = []; S.il = false;
+      try { stopAndroidRecognition(); } catch(e) {}
+    }
+    sh(pR());
+    return ld();
+  }
+  const sn = S.sn, ci = S.ci || 0, rg = S.rg || "", rs = S.rs || [];
+  let h = '<div class=hdr><span style="cursor:pointer;color:#2563eb;font-size:14px" onclick="nav(\'/\')">← 返回</span><span class="s14 fw6">' + S.rt.title + '</span></div>';
+  h += '<div class=sc><div class="f12 mb2">第 ' + (ci+1) + ' / ' + sn.length + ' 句</div><div style="color:#4b5563;font-size:15px">' + sn[ci] + '</div></div>';
+  h += '<div class=rb><div class="f12 mb2" style="color:#60a5fa">你背的：</div><div style="color:' + (rg?"#334155":"#93c5fd") + '">' + (rg || "等待你说...") + '</div></div>';
+  const pct = (rs.length + (rg?1:0)) / sn.length * 100;
+  h += '<div class="flex ac g3 mb6"><div class="f1 pb"><div class=pf style="width:' + pct + '%"></div></div><span class=f12>' + (rs.length+(rg?1:0)) + '/' + sn.length + '</span></div>';
+  h += '<div class="flex g3">';
+  if (S.il) h += '<button class="btn by f1" onclick="stR()">⏸ 暂停</button>';
+  else h += '<button class="btn bg f1" onclick="stR()">🎤 开始</button>';
+  if (rg) h += '<button class="btn bp" onclick="nxR()">下一句 →</button>';
+  if (rg) h += '<button class="btn bgr" onclick="fnR()">完成</button>';
+  h += '</div>';
+  if (!rg) h += '<div class="tc mt8"><button class="btn bgr bs" onclick="tR()">📝 手动输入</button></div>';
+  return h;
+}
+
+function tR() {
+  const txt = prompt("请输入你背诵的这句：");
+  if (txt) { S.rg = txt; sh(pR()); }
+}
+
+function stR() {
+  if (isListening) { stopAndroidRecognition(); S.il = false; sh(pR()); return; }
+  const lang = S.rt?.subject_name === "英语" ? "en-US" : "zh-CN";
+  S.il = true; sh(pR());
+  startAndroidRecognition(lang, function(text) {
+    if (text) {
+      S.rg = (S.rg || "") + text;
+      S.il = false;
+      sh(pR());
+    } else {
+      S.il = false;
+      sh(pR());
+    }
+  });
+}
+
+function nxR() {
+  S.rs = [...(S.rs||[]), { spoken: S.rg || "" }];
+  S.rg = "";
+  if ((S.ci||0) < S.sn.length - 1) {
+    S.ci++;
+    sh(pR());
+  } else {
+    fnR();
+  }
+}
+
+function fnR() {
+  try { stopAndroidRecognition(); } catch(e) {}
+  const du = S.st ? Math.round((Date.now() - S.st) / 1000) : 0;
+  const sp = S.sn.map((_, i) => { const r = (S.rs||[])[i]; return r ? r.spoken : ""; });
+  if ((S.rs||[]).length === (S.ci||0)) sp[S.ci||0] = S.rg || "";
+
+  // Compare and score
+  const results = [];
+  let totalScore = 0;
+  for (let i = 0; i < S.sn.length; i++) {
+    const expected = S.sn[i];
+    const spoken = sp[i] || "";
+    const matched = compareText(expected, spoken);
+    const score = matched.length > 0 ? Math.round(matched.filter(m => m.correct).length / matched.length * 100) : 0;
+    totalScore += score;
+    results.push({ sentence_index: i, score, matched, expected, spoken });
+  }
+  const avgScore = S.sn.length > 0 ? Math.round(totalScore / S.sn.length) : 0;
+
+  // Save mistakes
+  for (const r of results) {
+    for (const m of r.matched) {
+      if (!m.correct && m.expected) {
+        C.mistakes.add(S.ri, r.sentence_index, m.expected);
+      }
+    }
+  }
+
+  // Save attempt
+  C.attempts.create({
+    text_id: S.ri,
+    spoken_sentences: sp,
+    score: avgScore,
+    results: results,
+    duration_sec: du
+  });
+  S.lr = { score: avgScore, results: results };
+  nav("/res/" + S.ri);
+}
+
+function compareText(a, b) {
+  const ar = [...a], br = [...b];
+  const maxLen = Math.max(ar.length, br.length);
+  const result = [];
+  for (let i = 0; i < maxLen; i++) {
+    if (i < ar.length && i < br.length) {
+      result.push({ expected: ar[i], actual: br[i], correct: ar[i] === br[i] });
+    } else if (i < ar.length) {
+      result.push({ expected: ar[i], actual: '', correct: false });
+    } else {
+      result.push({ expected: '', actual: br[i], correct: false });
+    }
+  }
+  return result;
+}
+
+// ========== Page: Result ==========
+function pRes() {
+  const m = cu().match(/\/res\/(\d+)/);
+  if (!m) { nav("/"); return ld(); }
+  const id = Number(m[1]);
+  const lr = S.lr;
+  let h = '<div class=hdr><span style="cursor:pointer;color:#2563eb;font-size:14px" onclick="nav(\'/\')">← 返回</span><span class="s14 fw6">背诵结果</span></div>';
+  if (lr) {
+    const sc = lr.score, co = sc >= 90 ? "#16a34a" : sc >= 70 ? "#ca8a04" : "#dc2626";
+    const msg = sc >= 90 ? "🏑 太棒了！继续加油" : sc >= 70 ? "💭 不错，还有进步空间" : "📉 再背一次吧";
+    h += '<div class="tc mb8"><div style="font-size:60px;font-weight:700;color:' + co + '">' + sc + '%</div><div class=f12>' + msg + '</div></div>';
+    if (lr.results) for (let i = 0; i < lr.results.length; i++) {
+      const r = lr.results[i];
+      h += '<div class=card><div class="flex jsb ac mb2"><span class=f12>第' + (i+1) + '句</span><span class="bd ' + (r.score>=90?"bg2":"by2") + '">' + r.score + '%</span></div><div class="flex fw" style="gap:2px">';
+      if (r.matched) for (const q of r.matched) {
+        h += '<span class="' + (q.correct?"cg":"ce") + '">' + (q.expected) + '</span>';
+      }
+      if (r.spoken && r.score < 100) {
+        h += '<div class=ed>你说：' + r.spoken + '</div>';
+      }
+      h += '</div></div>';
+    }
+    h += '<div class="tc mt8"><button class="btn bp" onclick="S.rt=null;nav(\'/r/' + id + '\')">再背一次</button></div>';
+  } else {
+    // Show history
+    const hist = C.attempts.history(id);
+    if (hist.length === 0) h += '<div class=ld>还没有背诵记录</div>';
+    else for (const a of hist) {
+      h += '<div class=card><div class="flex jsb ac"><span class="s14 fw6">' + Math.round(a.score) + '分</span><span class=f12>' + (a.created_at||'') + '</span></div></div>';
+    }
+  }
+  return h;
+}
+
+// ========== Page: Mistakes ==========
+function pMs() {
+  setTimeout(() => {
+    const stats = C.mistakes.stats();
+    const rankings = C.mistakes.rankings();
+    let h = '<div class=hdr><span style="cursor:pointer;color:#2563eb;font-size:14px" onclick="nav(\'/\')">← 返回</span><span class="s14 fw6">错题本</span></div>';
+    h += '<div class="tc mb6" style="font-size:36px">📕</div>';
+    h += '<h2 class="s14 fw6 mb3">高频错误排行</h2>';
+    if (rankings.length === 0) h += '<div class=ld>还没有错题记录</div>';
+    else for (const r of rankings) {
+      h += '<div class="card flex jsb ac"><div><span class="s14 fw6">' + r.word + '</span><div class="f12 lg mt2">出自：' + (r.texts||'') + '</div></div><span class="bd ' + (r.total>=5?"by2":"bg2") + '">' + r.total + '次</span></div>';
+    }
+    h += '<div class="mt8"><button class="btn bgr bs" style="color:#dc2626;border:1px solid #fecaca;background:#fff" onclick="if(confirm(\'确定清空所有错题？\')){C.mistakes.clear();sh(pMs())}">清空错题记录</button></div>';
+    sh(h);
+  }, 0);
+  return ld();
+}
+
+// ========== Page: Admin ==========
+function pAd() {
+  if (!sessionStorage.getItem("aa")) {
+    let h = '<div class=hdr><span style="cursor:pointer;color:#2563eb;font-size:14px" onclick="nav(\'/\')">← 返回</span><span class="s14 fw6">管理</span></div>';
+    h += '<div class=tc style="padding:60px 0"><div style="font-size:48px;margin-bottom:20px">🔒</div><div class="f12 gy mb3">请输入管理密码</div><input class=inp type=password id=ap placeholder="密码" style="max-width:200px"><div class="mt8"><button class="btn bp" onclick="lAd()">确认</button></div></div>';
+    return h;
+  }
+  lAd2();
+  return ld();
+}
+function lAd() {
+  const p = document.getElementById("ap")?.value;
+  if (p === "123456") { sessionStorage.setItem("aa", "1"); sh(pAd()); }
+  else alert("密码错误");
+}
+function lAd2() {
+  const t = C.texts.list();
+  let h = '<div class="flex jsb ac mb6"><h1 class=s20>📖 课文管理</h1><div class="flex g2"><button class="btn bp bs" onclick="nav(\'/an\')">＋ 新增</button><button class="btn bgr bs" onclick="sessionStorage.removeItem(\'aa\');sh(pAd())">退出</button></div></div>';
+  if (t.length === 0) h += '<div class=ld>还没有课文</div>';
+  else for (const x of t) {
+    h += '<div class="card flex jsb ac" style="padding:10px 14px"><div><div class=s14>' + (x.subject_emoji||"") + ' ' + (x.title||"") + '</div><div class="f12 lg mt2">' + (x.source==="builtin"?"内置":"自定义") + '</div></div><div class="flex g2"><button class="btn bgr bs" onclick="S.ei=' + x.id + ';nav(\'/ae/' + x.id + '\')">编辑</button><button class="btn bgr bs" style="color:#dc2626" onclick="if(confirm(\'确定删除《' + x.title + '》？\')){C.texts.delete(' + x.id + ');sh(pAd())}">删除</button></div></div>';
+  }
+  sh(h);
+}
+
+// ========== Page: Add/Edit Text ==========
+function pAf() {
+  const p = cu();
+  const ed = p.includes("/ae");
+  const id = ed ? Number(p.split("/")[2]) : null;
+  setTimeout(() => {
+    let f = { subject_id: 1, title: "", content: "", source: "manual", grade: "", tags: "" };
+    if (ed && id) { const t = C.texts.get(id); if (t) f = { subject_id: t.subject_id, title: t.title, content: (t.content||"").replace(/\|/g, "\n"), source: t.source, grade: t.grade || "", tags: t.tags || "" }; }
+    const esc = s => (s||"").replace(/"/g,"&quot;").replace(/</g,"&lt;");
+    let h = '<div class=hdr><span style="cursor:pointer;color:#2563eb;font-size:14px" onclick="nav(\'/ad\')">← 返回</span><span class="s14 fw6">' + (ed ? "编辑课文" : "新增课文") + '</span></div>';
+    h += '<div class=mb4><div class="f12 gy mb1">科目</div><div class="flex g2" id="sb"><button class="tab ' + (f.subject_id===1?"ta":"tb") + '" onclick="window._sf=1;document.querySelectorAll(\'#sb button\').forEach((b,i)=>b.className=\'tab \'+(i===0?\'ta\':\'tb\'))">语文</button><button class="tab ' + (f.subject_id===2?"ta":"tb") + '" onclick="window._sf=2;document.querySelectorAll(\'#sb button\').forEach((b,i)=>b.className=\'tab \'+(i===1?\'ta\':\'tb\'))">英语</button></div></div>';
+    h += '<div class=mb4><div class="f12 gy mb1">标题</div><input class=inp id=ft value="' + esc(f.title) + '" placeholder="静夜思"></div>';
+    h += '<div class="flex g3 mb4"><div class=f1><div class="f12 gy mb1">年级</div><input class=inp id=fg value="' + esc(f.grade) + '" placeholder="一上"></div><div class=f1><div class="f12 gy mb1">标签</div><input class=inp id=ftg value="' + esc(f.tags) + '" placeholder="逗号分隔"></div></div>';
+    h += '<div class=mb4><div class="flex jsb ac mb1"><span class="f12 gy">课文内容（每行一句）</span></div><textarea class=ta id=fc placeholder="床前明月光">' + esc(f.content) + '</textarea></div>';
+    h += '<button class="btn bp bw" onclick="svF(' + (ed?"'" + id + "'":"null") + ')">' + (ed?"保存修改":"添加课文") + '</button>';
+    sh(h);
+  }, 0);
+  return ld();
+}
+window._sf = 1;
+function svF(id) {
+  const t = document.getElementById("ft")?.value?.trim(), c = document.getElementById("fc")?.value?.trim();
+  if (!t || !c) { alert("标题和内容不能为空"); return; }
+  const d = { subject_id: window._sf || 1, title: t, content: c.split("\n").map(s=>s.trim()).filter(Boolean).join("|"), grade: document.getElementById("fg")?.value || "", tags: document.getElementById("ftg")?.value || "", source: "manual" };
+  try {
+    if (id) C.texts.update(Number(id), d);
+    else C.texts.create(d);
+    nav("/ad");
+  } catch(e) { alert("保存失败"); }
+}
+
+// ========== Router ==========
+function rt() {
+  const p = cu();
+  if (p === "/" || p === "") sh(pH());
+  else if (p.startsWith("/r/")) sh(pR());
+  else if (p.startsWith("/res/")) sh(pRes());
+  else if (p === "/ms") sh(pMs());
+  else if (p === "/ad") sh(pAd());
+  else if (p === "/an") sh(pAf());
+  else if (/^\/ae\/\d+$/.test(p)) sh(pAf());
+  else sh(pH());
+}
+window.addEventListener("hashchange", rt);
+window.addEventListener("load", () => { if (!location.hash) location.hash = "#/"; rt(); });
+</script>
+</body>
+</html>
